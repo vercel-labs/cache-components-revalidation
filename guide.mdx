@@ -1,18 +1,16 @@
 ---
-title: Revalidating cached data
+title: Revalidating Cached Data
 description: Learn how to keep cached pages fresh with periodic revalidation using cacheLife and on-demand revalidation using cacheTag and revalidateTag.
-nav_title: Revalidating
+nav_title: Revalidating Data
 ---
 
-Cached pages load fast, but the data behind them can go stale. A product's price changes, a description gets updated, new inventory arrives. You need a way to refresh cached content without rebuilding and redeploying your entire app.
+Cached pages load fast, but the data behind them can change and become stale. For example, a product's price changes, a description gets updated, new inventory arrives. You need a way to refresh cached content without rebuilding and redeploying your entire app.
 
 This guide covers two revalidation strategies: **periodic revalidation** to refresh data on a time-based schedule, and **on-demand revalidation** to expire specific cache entries the moment data changes.
 
-It builds on the product detail page from the [page variants guide](/docs/app/guides/page-variants).
-
 ## Example
 
-We'll take the existing product detail page that already uses [`'use cache'`](/docs/app/api-reference/directives/use-cache) and [`generateStaticParams`](/docs/app/api-reference/functions/generate-static-params) and add a cache lifetime so product data refreshes daily. Then we'll add cache tags so individual products can be revalidated instantly through an API route.
+We'll take an existing product detail page that already uses [`'use cache'`](/docs/app/api-reference/directives/use-cache) and [`generateStaticParams`](/docs/app/api-reference/functions/generate-static-params), and add a cache lifetime so product data refreshes daily. Then we'll add cache tags so individual products can be revalidated instantly through an [Route Handler]()
 
 You can find the resources used in this example here:
 
@@ -33,9 +31,23 @@ export async function getProduct(slug: string): Promise<Product> {
 }
 ```
 
-With the default cache profile, data is considered stale after a short window and expires after a long one. For product data that changes infrequently, we want a longer freshness window.
+#### Cache lifetime profiles
 
-Import [`cacheLife`](/docs/app/api-reference/functions/cacheLife) from `next/cache` and call it inside the cached function:
+[`cacheLife`]() accepts a named profile that configures how long cached data stays fresh before revalidating in the background. If you don't specify a profile, Next.js uses `default`. The built-in profiles are:
+
+| Profile     | Stale | Revalidate | Expire |
+| ----------- | ----- | ---------- | ------ |
+| `default`   | 5m    | 15m        | 1y     |
+| `'seconds'` | 30s   | 1s         | 1m     |
+| `'minutes'` | 5m    | 1m         | 1h     |
+| `'hours'`   | 5m    | 1h         | 1d     |
+| `'days'`    | 5m    | 1d         | 1w     |
+| `'weeks'`   | 5m    | 1w         | 30d    |
+| `'max'`     | 5m    | 30d        | 1y     |
+
+With `cacheLife('days')`, the data is served from cache immediately, [revalidated](/docs/app/glossary#revalidation) in the background after a day, and expires after a week. This means the first visitor after the revalidation window gets a stale response while a fresh one is generated, subsequent visitors get the updated data.
+
+Import [`cacheLife`](/docs/app/api-reference/functions/cacheLife) from `next/cache` and set the lifetime to `days`:
 
 ```tsx filename="app/products/data.ts"
 import { cacheLife } from 'next/cache'
@@ -60,24 +72,9 @@ Route (app)                    Revalidate  Expire
 ◐  (Partial Prerender)  prerendered as static HTML with dynamic server-streamed content
 ```
 
-#### Cache lifetime profiles
-
-**`cacheLife`** accepts a named profile that configures how long cached data stays fresh before revalidating in the background. The built-in profiles are:
-
-| Profile     | Stale | Revalidate | Expire |
-| ----------- | ----- | ---------- | ------ |
-| `'seconds'` | 30s   | 1s         | 1m     |
-| `'minutes'` | 5m    | 1m         | 1h     |
-| `'hours'`   | 5m    | 1h         | 1d     |
-| `'days'`    | 5m    | 1d         | 1w     |
-| `'weeks'`   | 5m    | 1w         | 30d    |
-| `'max'`     | 5m    | 30d        | 1y     |
-
-With `cacheLife('days')`, the data is served from cache immediately, [revalidated](/docs/app/glossary#revalidation) in the background after a day, and expires after a week. This means the first visitor after the revalidation window gets a stale response while a fresh one is generated — subsequent visitors get the updated data.
-
 ### Step 2: Tag and revalidate on demand
 
-Periodic revalidation works for data that changes on a predictable schedule. But when a product's price is updated in your CMS, you don't want to wait up to a day for the change to appear.
+Periodic revalidation works for data that changes on a predictable schedule. But sometimes you want data to be refreshed immediately, for example, when a product's price is updated in your CMS, you don't want to wait up to a day for the change to appear.
 
 #### Cache tags
 
@@ -97,7 +94,7 @@ export async function getProduct(slug: string): Promise<Product> {
 }
 ```
 
-**`cacheTag`** attaches one or more string labels to a cache entry. These tags don't affect caching behavior on their own — they exist so you can target specific entries for invalidation later.
+`cacheTag` attaches one or more string labels to a cache entry. These tags don't affect caching behavior on their own, they exist so you can target specific entries for invalidation later.
 
 You can tag the product list function too, so the full data layer looks like this:
 
@@ -127,7 +124,7 @@ export async function getProduct(slug: string): Promise<Product> {
 
 To invalidate a tagged entry, call [`revalidateTag`](/docs/app/api-reference/functions/revalidateTag) from a [Route Handler](/docs/app/building-your-application/routing/route-handlers) or [Server Action](/docs/app/building-your-application/data-fetching/server-actions-and-mutations).
 
-Create an API route that accepts a tag and invalidates it:
+Create a Route Handler that accepts a tag and invalidates it:
 
 ```tsx filename="app/api/revalidate/route.ts"
 import { revalidateTag } from 'next/cache'
@@ -159,6 +156,45 @@ This returns:
 The next request to `/products/shorts` will fetch fresh product data instead of serving the cached version.
 
 In production, this endpoint is what your CMS calls via a webhook when content changes. A product is updated in the CMS → the CMS sends a POST to `/api/revalidate` with the product's tag → the cached entry is marked as expired → the first visitor gets fresh data and subsequent visitors get cached data.
+
+### Step 3: Secure the revalidation endpoint
+
+The Route Handler is public, anyone who knows the URL can invalidate your cache. To prevent this, check for a secret token before processing the request.
+
+Read the `Authorization` header and compare its bearer token against a server-side environment variable. If the token is missing or doesn't match, return a `401`:
+
+```tsx filename="app/api/revalidate/route.ts"
+import { revalidateTag } from 'next/cache'
+import type { NextRequest } from 'next/server'
+
+export async function POST(request: NextRequest) {
+  const authHeader = request.headers.get('authorization')
+  if (authHeader !== `Bearer ${process.env.REVALIDATION_SECRET}`) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const { tag } = await request.json()
+  revalidateTag(tag, 'days')
+  return Response.json({ revalidated: true, tag })
+}
+```
+
+Store `REVALIDATION_SECRET` as an environment variable on your hosting provider. For local development, add it to `.env`, and git ignore it.
+
+Now send the `curl` request with the `Authorization` header:
+
+```bash filename="Terminal"
+curl -X POST http://localhost:3000/api/revalidate \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <token>' \
+  -d '{"tag": "product-shorts"}'
+```
+
+Without the header, the endpoint returns a `401`:
+
+```json
+{ "error": "Unauthorized" }
+```
 
 ## Next steps
 
