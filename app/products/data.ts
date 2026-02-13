@@ -8,6 +8,7 @@ export type Product = {
   price: number
   image: string
   category: string
+  updatedAt: string
 }
 
 export async function getProducts(): Promise<Product[]> {

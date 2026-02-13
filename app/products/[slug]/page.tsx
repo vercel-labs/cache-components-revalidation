@@ -49,11 +49,20 @@ export default async function Page({
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
             {product.name}
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            {product.description}
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            Updated{' '}
+            {new Date(product.updatedAt).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            })}
           </p>
           <p className="text-lg font-medium text-gray-900 dark:text-gray-100">
             ${product.price}
+          </p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            {product.description}
           </p>
         </div>
       </div>
